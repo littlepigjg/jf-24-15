@@ -134,11 +134,14 @@ export const ExportService = {
   },
 
   async listTasks(): Promise<ExportTask[]> {
-    return exportTaskRepository.getAll()
+    const all = await exportTaskRepository.getAll()
+    return all.map((t) => ({ ...t, progress: computeProgress(t) }))
   },
 
   async getTaskById(id: string): Promise<ExportTask | undefined> {
-    return exportTaskRepository.getById(id)
+    const task = await exportTaskRepository.getById(id)
+    if (!task) return undefined
+    return { ...task, progress: computeProgress(task) }
   },
 
   async createTask(params: {

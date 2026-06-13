@@ -1,8 +1,8 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { Readable, Transform } from 'node:stream'
 import type { QrCode, ScanRecord, ExportFormat } from '../../../../shared/types.js'
-import { StatsService } from '../../../services/StatsService.js'
 import { escapeCsvValue, ensureDir, fileExists } from './common.js'
 
 export function buildCsvHeaders(format: ExportFormat): string[] {
@@ -51,41 +51,15 @@ export function headersLine(headers: string[]): string {
   return headers.map(escapeCsvValue).join(',')
 }
 
-async function* iterateRows(
-  qrcodes: QrCode[],
-  format: ExportFormat,
-): AsyncGenerator<string, void, unknown> {
-  if (format === 'csv' || format === 'full') {
-    for (const qr of qrcodes) {
-      yield qrCodeToCsvRow(qr)
-    }
-  } else if (format === 'scans_csv') {
-    for (const qr of qrcodes) {
-      let page = 1
-      const pageSize = 10000
-      while (true) {
-        const result = await StatsService.listScanRecords(page, pageSize, qr.id)
-        for (const r of result.items) {
-          yield scanRecordToCsvRow(r)
-        }
-        if (page * pageSize >= result.total || result.items.length === 0) {
-          break
-        }
-        page++
-      }
-    }
-  }
-}
-
 export async function writeCsvChunk(params: {
   outputPath: string
-  qrcodes: QrCode[]
+  rowIterator: AsyncGenerator<string, void, unknown>
   format: ExportFormat
   includeHeader?: boolean
   signal?: { aborted?: boolean; paused?: boolean }
 }): Promise<{ rowCount: number; sizeBytes: number }> {
-  const { outputPath, qrcodes, format, includeHeader = false, signal } = params
-  await ensureDir(require('node:path').dirname(outputPath))
+  const { outputPath, rowIterator, format, includeHeader = false, signal } = params
+  await ensureDir(path.dirname(outputPath))
 
   const headers = buildCsvHeaders(format)
   let rowCount = 0
@@ -103,7 +77,7 @@ export async function writeCsvChunk(params: {
 
   const pump = async (): Promise<void> => {
     try {
-      for await (const row of iterateRows(qrcodes, format)) {
+      for await (const row of rowIterator) {
         if (signal?.aborted || signal?.paused) {
           source.push(null)
           return
@@ -132,7 +106,7 @@ export async function mergeCsvChunks(params: {
   signal?: { aborted?: boolean }
 }): Promise<{ totalSizeBytes: number }> {
   const { chunkPaths, outputPath, format, signal } = params
-  await ensureDir(require('node:path').dirname(outputPath))
+  await ensureDir(path.dirname(outputPath))
 
   const headers = buildCsvHeaders(format)
   const finalWrite = fs.createWriteStream(outputPath, { encoding: 'utf-8' })

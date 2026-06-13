@@ -1,9 +1,13 @@
-import fs from 'node:fs/promises'
 import path from 'node:path'
-import { qrCodeRepository } from '../../../repositories/QrCodeRepository.js'
 import { exportTaskRepository } from '../../../repositories/ExportTaskRepository.js'
 import { writeCsvChunk } from './csv.js'
-import { writeZipChunkFiles, writeZipManifest, type ZipTempEntry } from './zip.js'
+import {
+  writeZipChunkFiles,
+  writeZipManifest,
+  verifyZipManifestIntegrity,
+  type ZipTempEntry,
+} from './zip.js'
+import { iterateQrCodesByIds, iterateCsvRows } from './dataStream.js'
 import {
   chunkFilename,
   chunkTempDir,
@@ -13,7 +17,7 @@ import {
   computeChecksum,
   MAX_RETRY_COUNT,
 } from './common.js'
-import type { QrCode, ExportTask, ExportChunk, ExportFormat } from '../../../../shared/types.js'
+import type { ExportTask, ExportChunk, ExportFormat } from '../../../../shared/types.js'
 
 export interface ChunkProcessResult {
   success: boolean
@@ -51,12 +55,6 @@ export async function processChunk(
     throw new Error('Aborted or paused before processing')
   }
 
-  const qrcodes: QrCode[] = []
-  for (const id of chunk.itemIds) {
-    const qr = await qrCodeRepository.getById(id)
-    if (qr) qrcodes.push(qr)
-  }
-
   const startTime = Date.now()
 
   await updateChunkStatus(taskId, chunkIndex, 'processing', { startedAt: new Date().toISOString() })
@@ -69,9 +67,9 @@ export async function processChunk(
     let result: ChunkProcessResult
 
     if (task.format === 'zip') {
-      result = await processZipChunkToDisk(task, chunk, qrcodes, tempDir, signal)
+      result = await processZipChunkToDisk(task, chunk, tempDir, signal)
     } else {
-      result = await processCsvChunkToDisk(task, chunk, qrcodes, signal)
+      result = await processCsvChunkToDisk(task, chunk, signal)
     }
 
     if (signal.aborted || signal.paused) {
@@ -115,16 +113,17 @@ export async function processChunk(
 async function processCsvChunkToDisk(
   task: ExportTask,
   chunk: ExportChunk,
-  qrcodes: QrCode[],
   signal: { aborted?: boolean; paused?: boolean },
 ): Promise<ChunkProcessResult> {
   const filename = chunkFilename(task.id, chunk.index, task.format)
   const outputPath = path.join(CHUNKS_DIR, filename)
   const includeHeader = chunk.index === 0
 
+  const rowIterator = iterateCsvRows(chunk.itemIds, task.format, signal)
+
   const { rowCount, sizeBytes } = await writeCsvChunk({
     outputPath,
-    qrcodes,
+    rowIterator,
     format: task.format,
     includeHeader,
     signal,
@@ -145,15 +144,16 @@ async function processCsvChunkToDisk(
 async function processZipChunkToDisk(
   task: ExportTask,
   chunk: ExportChunk,
-  qrcodes: QrCode[],
   tempDir: string,
   signal: { aborted?: boolean; paused?: boolean },
 ): Promise<ChunkProcessResult> {
+  const qrcodeIterator = iterateQrCodesByIds(chunk.itemIds, signal)
+
   const { entries, totalSizeBytes } = await writeZipChunkFiles({
     taskId: task.id,
     chunkIndex: chunk.index,
     tempDir,
-    qrcodes,
+    qrcodeIterator,
     prefix: `qrcodes/`,
     signal,
   })
@@ -162,7 +162,7 @@ async function processZipChunkToDisk(
   await writeZipManifest({ manifestPath, entries })
 
   const sizeBytes = totalSizeBytes
-  const checksum = entries.map((e) => e.archivePath).join('|')
+  const checksum = entries.map((e) => e.archivePath + ':' + e.sizeBytes).join('|')
 
   return {
     success: true,
@@ -190,7 +190,12 @@ async function updateChunkStatus(
   await exportTaskRepository.update(taskId, { chunks: task.chunks })
 }
 
-export function buildChunkList(totalItems: number, chunkSize: number, taskId: string, qrIds: string[]): ExportChunk[] {
+export function buildChunkList(
+  totalItems: number,
+  chunkSize: number,
+  taskId: string,
+  qrIds: string[],
+): ExportChunk[] {
   const totalChunks = Math.ceil(totalItems / chunkSize)
   const chunks: ExportChunk[] = []
 
@@ -219,13 +224,19 @@ export async function verifyChunkIntegrity(chunk: ExportChunk): Promise<boolean>
   const exists = await fileExists(chunk.filePath)
   if (!exists) return false
 
-  if (chunk.checksum && chunk.filePath.endsWith('.csv')) {
+  if (chunk.filePath.endsWith('.csv')) {
+    if (!chunk.checksum) return false
     try {
       const actual = await computeChecksum(chunk.filePath)
       return actual === chunk.checksum
     } catch {
       return false
     }
+  }
+
+  if (chunk.filePath.endsWith('.json')) {
+    const { ok } = await verifyZipManifestIntegrity(chunk.filePath)
+    return ok
   }
 
   return true

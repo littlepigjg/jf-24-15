@@ -45,7 +45,7 @@ export function computeProgress(task: ExportTask): ExportProgress {
     processedItems,
     uploadedChunks,
     totalChunks: task.totalChunks,
-    percentage: Math.round(percentage * 10000) / 100,
+    percentage: Math.round(percentage * 100) / 100,
     estimatedRemainingSeconds,
     averageSpeed: Math.round(averageSpeed * 100) / 100,
     startedAt: task.startedAt || task.createdAt,

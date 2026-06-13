@@ -17,26 +17,34 @@ export async function writeZipChunkFiles(params: {
   taskId: string
   chunkIndex: number
   tempDir: string
-  qrcodes: QrCode[]
+  qrcodeIterator: AsyncGenerator<QrCode, void, unknown>
   prefix?: string
   signal?: { aborted?: boolean; paused?: boolean }
 }): Promise<{ entries: ZipTempEntry[]; totalSizeBytes: number; skippedCount: number }> {
-  const { taskId, chunkIndex, tempDir, qrcodes, prefix = '', signal } = params
+  const { taskId, chunkIndex, tempDir, qrcodeIterator, prefix = '', signal } = params
   const bucket = String(chunkIndex % 256).padStart(2, '0')
   const chunkDir = path.join(tempDir, bucket, `chunk_${chunkIndex}`)
+
+  try {
+    await fsPromises.rm(chunkDir, { recursive: true, force: true })
+  } catch {
+    // ignore
+  }
   await ensureDir(chunkDir)
 
   const entries: ZipTempEntry[] = []
   let totalSizeBytes = 0
   let skippedCount = 0
   const usedNames = new Map<string, number>()
+  let itemIndex = 0
 
-  for (let i = 0; i < qrcodes.length; i++) {
+  for await (const qr of qrcodeIterator) {
     if (signal?.aborted || signal?.paused) break
-    const qr = qrcodes[i]
+
     const filename = safeFilename(qr.name || qr.shortCode, usedNames, 'png')
-    const filePath = path.join(chunkDir, `${i}_${filename}`)
+    const filePath = path.join(chunkDir, `${itemIndex}_${filename}`)
     const archivePath = prefix + filename
+    itemIndex++
 
     try {
       const buf = await QrService.generatePngBuffer(qr)
@@ -60,6 +68,23 @@ export async function mergeZipFiles(params: {
 }): Promise<{ totalSizeBytes: number; entryCount: number }> {
   const { allEntries, outputPath, zipLevel = 9, signal } = params
   await ensureDir(path.dirname(outputPath))
+
+  const deduped: ZipTempEntry[] = []
+  const usedArchiveNames = new Map<string, number>()
+  for (const entry of allEntries) {
+    const base = path.basename(entry.archivePath)
+    const dir = path.dirname(entry.archivePath)
+    let finalArchivePath = entry.archivePath
+    const count = usedArchiveNames.get(entry.archivePath) || 0
+    if (count > 0) {
+      const ext = path.extname(base)
+      const stem = path.basename(base, ext)
+      const newBase = `${stem}_${count}${ext}`
+      finalArchivePath = dir === '.' ? newBase : path.join(dir, newBase)
+    }
+    usedArchiveNames.set(entry.archivePath, count + 1)
+    deduped.push({ ...entry, archivePath: finalArchivePath })
+  }
 
   return new Promise((resolve, reject) => {
     const archive = archiver('zip', { zlib: { level: zipLevel } })
@@ -91,7 +116,7 @@ export async function mergeZipFiles(params: {
 
     void (async () => {
       try {
-        for (const entry of allEntries) {
+        for (const entry of deduped) {
           if (signal?.aborted) {
             abortHandler()
             return
@@ -134,5 +159,22 @@ export async function readZipManifest(manifestPath: string): Promise<ZipTempEntr
     return JSON.parse(raw) as ZipTempEntry[]
   } catch {
     return []
+  }
+}
+
+export async function verifyZipManifestIntegrity(manifestPath: string): Promise<{ ok: boolean; entries: ZipTempEntry[] }> {
+  try {
+    const entries = await readZipManifest(manifestPath)
+    if (entries.length === 0) return { ok: false, entries: [] }
+    for (const entry of entries) {
+      try {
+        await fsPromises.access(entry.filePath)
+      } catch {
+        return { ok: false, entries }
+      }
+    }
+    return { ok: true, entries }
+  } catch {
+    return { ok: false, entries: [] }
   }
 }

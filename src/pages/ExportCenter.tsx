@@ -207,6 +207,15 @@ export default function ExportCenter() {
   const clearSelected = () => setSelected(new Set());
 
   const getProgress = (task: ExportTask) => {
+    if (task.progress && task.progress.averageSpeed > 0) {
+      return {
+        percentage: task.progress.percentage,
+        completedItems: task.progress.processedItems,
+        speed: task.progress.averageSpeed,
+        remainingSeconds: task.progress.estimatedRemainingSeconds,
+        elapsedSeconds: task.progress.activeElapsedSeconds,
+      };
+    }
     const completed = task.chunks.filter((c) => c.status === "completed").length;
     const percentage = task.totalChunks > 0 ? (completed / task.totalChunks) * 100 : 0;
 

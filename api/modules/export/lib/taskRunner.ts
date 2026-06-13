@@ -55,7 +55,7 @@ export async function startTask(taskId: string): Promise<ExportTask | undefined>
 
   void runTaskWorker(taskId)
 
-  return updatedTask
+  return { ...updatedTask, progress: computeProgress(updatedTask) }
 }
 
 export async function pauseTask(taskId: string): Promise<boolean> {
