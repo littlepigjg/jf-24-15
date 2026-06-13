@@ -214,9 +214,9 @@ export default function ExportCenter() {
       .filter((c) => c.status === "completed")
       .reduce((sum, c) => sum + (c.endIndex - c.startIndex), 0);
 
-    const startTime = new Date(task.startedAt || task.createdAt).getTime();
-    const elapsed = Math.max(1, Math.floor((Date.now() - startTime) / 1000));
-    const speed = completedItems / elapsed;
+    const activeMs = task.activeTimeMs || 0;
+    const activeSeconds = Math.max(1, Math.ceil(activeMs / 1000));
+    const speed = activeSeconds > 0 ? completedItems / activeSeconds : 0;
     const remainingItems = task.totalItems - completedItems;
     const remainingSeconds = speed > 0 ? Math.ceil(remainingItems / speed) : 0;
 
@@ -225,7 +225,7 @@ export default function ExportCenter() {
       completedItems,
       speed: Math.round(speed * 100) / 100,
       remainingSeconds,
-      elapsedSeconds: elapsed,
+      elapsedSeconds: activeSeconds,
     };
   };
 

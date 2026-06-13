@@ -124,6 +124,9 @@ export interface ExportChunk {
   status: ChunkStatus
   retryCount: number
   uploadedUrl?: string
+  filePath?: string
+  sizeBytes?: number
+  checksum?: string
   errorMessage?: string
   startedAt?: string
   completedAt?: string
@@ -142,6 +145,7 @@ export interface ExportProgress {
   averageSpeed: number
   startedAt: string
   elapsedSeconds: number
+  activeElapsedSeconds: number
 }
 
 export interface ExportTask {
@@ -156,7 +160,10 @@ export interface ExportTask {
   status: ExportTaskStatus
   chunks: ExportChunk[]
   progress: ExportProgress
+  activeTimeMs: number
+  lastRunningAt?: string
   downloadUrl?: string
+  finalFilename?: string
   errorMessage?: string
   createdAt: string
   startedAt?: string

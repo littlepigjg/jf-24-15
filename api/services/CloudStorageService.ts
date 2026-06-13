@@ -12,20 +12,8 @@ async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true })
 }
 
-export interface UploadChunkResult {
-  success: boolean
-  chunkId: string
-  size: number
-}
-
-export interface MergeResult {
-  success: boolean
-  fileUrl: string
-  totalSize: number
-}
-
 export const CloudStorageService = {
-  async uploadChunk(taskId: string, chunkIndex: number, data: Buffer | string): Promise<UploadChunkResult> {
+  async uploadChunk(taskId: string, chunkIndex: number, data: Buffer | string): Promise<{ success: boolean; chunkId: string; size: number }> {
     await ensureDir(CHUNKS_DIR)
     const chunkId = `${taskId}_chunk_${chunkIndex}`
     const chunkPath = path.join(CHUNKS_DIR, chunkId)
@@ -35,40 +23,6 @@ export const CloudStorageService = {
       success: true,
       chunkId,
       size: stats.size,
-    }
-  },
-
-  async getChunkUrl(taskId: string, chunkIndex: number): Promise<string> {
-    const chunkId = `${taskId}_chunk_${chunkIndex}`
-    return `/api/storage/chunks/${chunkId}`
-  },
-
-  async mergeChunks(taskId: string, totalChunks: number, filename: string): Promise<MergeResult> {
-    await ensureDir(FILES_DIR)
-    const finalPath = path.join(FILES_DIR, `${taskId}_${filename}`)
-    let totalSize = 0
-
-    const writeStream = (await import('node:fs')).createWriteStream(finalPath)
-
-    for (let i = 0; i < totalChunks; i++) {
-      const chunkId = `${taskId}_chunk_${i}`
-      const chunkPath = path.join(CHUNKS_DIR, chunkId)
-      const chunkData = await fs.readFile(chunkPath)
-      totalSize += chunkData.length
-      await new Promise<void>((resolve, reject) => {
-        writeStream.write(chunkData, (err) => {
-          if (err) reject(err)
-          else resolve()
-        })
-      })
-    }
-
-    await new Promise<void>((resolve) => writeStream.end(() => resolve()))
-
-    return {
-      success: true,
-      fileUrl: `/api/storage/files/${taskId}_${filename}`,
-      totalSize,
     }
   },
 
@@ -85,11 +39,11 @@ export const CloudStorageService = {
   },
 
   async getFileUrl(taskId: string, filename: string): Promise<string> {
-    return `/api/storage/files/${taskId}_${filename}`
+    return `/api/storage/files/${filename}`
   },
 
-  async fileExists(taskId: string, filename: string): Promise<boolean> {
-    const filePath = path.join(FILES_DIR, `${taskId}_${filename}`)
+  async fileExists(filename: string): Promise<boolean> {
+    const filePath = path.join(FILES_DIR, filename)
     try {
       await fs.access(filePath)
       return true

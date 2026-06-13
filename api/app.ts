@@ -4,7 +4,7 @@ import express, {
   type NextFunction,
 } from 'express'
 import cors from 'cors'
-import path from 'path'
+import path from 'node:path'
 import fs from 'node:fs'
 import dotenv from 'dotenv'
 import { fileURLToPath } from 'url'
@@ -15,6 +15,7 @@ import batchRoutes from './routes/batch.js'
 import exportRoutes from './routes/export.js'
 import { RedirectService } from './services/RedirectService.js'
 import { CloudStorageService } from './services/CloudStorageService.js'
+import { ExportService } from './modules/export/index.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -68,20 +69,6 @@ app.get('/api/storage/files/:filename', (req: Request, res: Response) => {
   stream.pipe(res)
 })
 
-app.get('/api/storage/chunks/:chunkId', (req: Request, res: Response) => {
-  const { chunkId } = req.params
-  const chunksDir = CloudStorageService.getChunksDir()
-  const chunkPath = path.join(chunksDir, chunkId)
-
-  if (!fs.existsSync(chunkPath)) {
-    res.status(404).json({ success: false, error: '分片不存在' })
-    return
-  }
-
-  const stream = fs.createReadStream(chunkPath)
-  stream.pipe(res)
-})
-
 app.use(
   '/api/health',
   (req: Request, res: Response, next: NextFunction): void => {
@@ -106,5 +93,7 @@ app.use((req: Request, res: Response) => {
     error: 'API not found',
   })
 })
+
+void ExportService.recoverTasks()
 
 export default app
