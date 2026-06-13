@@ -5,6 +5,7 @@ import express, {
 } from 'express'
 import cors from 'cors'
 import path from 'path'
+import fs from 'node:fs'
 import dotenv from 'dotenv'
 import { fileURLToPath } from 'url'
 import authRoutes from './routes/auth.js'
@@ -13,6 +14,7 @@ import statsRoutes from './routes/stats.js'
 import batchRoutes from './routes/batch.js'
 import exportRoutes from './routes/export.js'
 import { RedirectService } from './services/RedirectService.js'
+import { CloudStorageService } from './services/CloudStorageService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -43,6 +45,42 @@ app.use('/api/qrcodes', qrcodesRoutes)
 app.use('/api/stats', statsRoutes)
 app.use('/api/batch', batchRoutes)
 app.use('/api/export', exportRoutes)
+
+app.get('/api/storage/files/:filename', (req: Request, res: Response) => {
+  const { filename } = req.params
+  const filesDir = CloudStorageService.getFilesDir()
+  const filePath = path.join(filesDir, filename)
+
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ success: false, error: '文件不存在' })
+    return
+  }
+
+  const ext = path.extname(filename).toLowerCase()
+  if (ext === '.csv') {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  } else if (ext === '.zip') {
+    res.setHeader('Content-Type', 'application/zip')
+  }
+
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+  const stream = fs.createReadStream(filePath)
+  stream.pipe(res)
+})
+
+app.get('/api/storage/chunks/:chunkId', (req: Request, res: Response) => {
+  const { chunkId } = req.params
+  const chunksDir = CloudStorageService.getChunksDir()
+  const chunkPath = path.join(chunksDir, chunkId)
+
+  if (!fs.existsSync(chunkPath)) {
+    res.status(404).json({ success: false, error: '分片不存在' })
+    return
+  }
+
+  const stream = fs.createReadStream(chunkPath)
+  stream.pipe(res)
+})
 
 app.use(
   '/api/health',

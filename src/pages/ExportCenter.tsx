@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import {
   Download,
   Archive,
@@ -14,9 +14,14 @@ import {
   ChevronRight,
   History,
   FileImage,
+  Pause,
+  Play,
+  Zap,
+  Timer,
+  Gauge,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { QrCode, PagedResult, BatchTask, BatchStatus } from "@shared/types";
+import type { QrCode, PagedResult, ExportTask, ExportTaskStatus, ExportFormat } from "@shared/types";
 
 const mockQrList: PagedResult<QrCode> = {
   items: Array.from({ length: 10 }, (_, i) => ({
@@ -39,33 +44,47 @@ const mockQrList: PagedResult<QrCode> = {
   pageSize: 10,
 };
 
-const mockTasks: BatchTask[] = Array.from({ length: 6 }, (_, i) => ({
-  id: `task-${100 - i}`,
-  name: `批量导出任务 ${i + 1}`,
-  baseUrl: `https://example.com/batch/${i}`,
-  paramName: "id",
-  totalCount: (i + 1) * 25,
-  successCount: i === 2 ? 0 : (i + 1) * 25,
-  status: i === 0 ? "running" : i === 2 ? "failed" : ("done" as BatchStatus),
-  qrcodeIds: [],
-  createdAt: new Date(Date.now() - i * 3600 * 1000 * 5).toISOString(),
-}));
-
-const statusMap: Record<BatchStatus, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
+const statusMap: Record<ExportTaskStatus, { label: string; cls: string; icon: typeof CheckCircle2 }> = {
   pending: { label: "等待中", cls: "tag-orange", icon: Clock },
   running: { label: "处理中", cls: "tag-blue", icon: Loader2 },
-  done: { label: "已完成", cls: "tag-green", icon: CheckCircle2 },
+  paused: { label: "已暂停", cls: "tag-yellow", icon: Pause },
+  completed: { label: "已完成", cls: "tag-green", icon: CheckCircle2 },
   failed: { label: "失败", cls: "tag-red", icon: Trash2 },
 };
 
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  return `${hours} 小时 ${mins} 分`;
+}
+
+function formatSpeed(speed: number): string {
+  if (speed < 1) return `${Math.round(speed * 100) / 100} 条/秒`;
+  if (speed < 1000) return `${Math.round(speed)} 条/秒`;
+  return `${(speed / 1000).toFixed(2)} K 条/秒`;
+}
+
 export default function ExportCenter() {
   const [qrList, setQrList] = useState<PagedResult<QrCode>>(mockQrList);
-  const [tasks, setTasks] = useState<BatchTask[]>(mockTasks);
+  const [tasks, setTasks] = useState<ExportTask[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tasksLoading, setTasksLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [keyword, setKeyword] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
+  const pollTimerRef = useRef<number | null>(null);
+
+  const fetchTasks = useCallback(async () => {
+    try {
+      const r = await api.listExportTasks();
+      setTasks(r.items as unknown as ExportTask[]);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     api
@@ -73,11 +92,25 @@ export default function ExportCenter() {
       .then(setQrList)
       .catch(() => setQrList({ ...mockQrList, page }))
       .finally(() => setLoading(false));
-    api
-      .listExportTasks()
-      .then((r) => setTasks(r.items))
-      .catch(() => setTasks(mockTasks));
-  }, [page]);
+    fetchTasks().finally(() => setTasksLoading(false));
+  }, [page, fetchTasks]);
+
+  useEffect(() => {
+    const hasRunning = tasks.some((t) => t.status === "running");
+    if (hasRunning) {
+      pollTimerRef.current = window.setInterval(() => {
+        fetchTasks();
+      }, 2000);
+    } else if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+      }
+    };
+  }, [tasks, fetchTasks]);
 
   const totalPages = Math.ceil(qrList.total / qrList.pageSize);
   const allSelected = qrList.items.length > 0 && qrList.items.every((q) => selected.has(q.id));
@@ -106,50 +139,95 @@ export default function ExportCenter() {
     });
   };
 
-  const handleExport = async (format: "zip" | "csv") => {
+  const handleCreateExportTask = async (format: ExportFormat) => {
     if (selected.size === 0) {
       alert("请至少选择一个二维码");
       return;
     }
     setExporting(true);
     try {
-      const blob = await api.exportQrCodes({
+      await api.createExportTask({
         ids: Array.from(selected),
         format,
+        name: `导出_${format}_${new Date().toLocaleString("zh-CN")}`,
       });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const ext = format === "zip" ? "zip" : "csv";
-      const mime = format === "zip" ? "application/zip" : "text/csv";
-      a.download = `qrcodes-export-${Date.now()}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      await fetchTasks();
     } catch (e) {
-      alert("导出失败，请稍后重试");
+      alert("创建导出任务失败，请稍后重试");
     } finally {
       setExporting(false);
     }
   };
 
-  const handleDownloadTask = (task: BatchTask) => {
-    if (task.status !== "done") return;
-    api
-      .downloadBatchZip(task.id)
-      .then((blob) => {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${task.name || task.id}.zip`;
-        a.click();
-        URL.revokeObjectURL(url);
-      })
-      .catch(() => alert("下载失败"));
+  const handlePauseTask = async (taskId: string) => {
+    try {
+      await api.pauseExportTask(taskId);
+      await fetchTasks();
+    } catch (e) {
+      alert("暂停失败");
+    }
+  };
+
+  const handleResumeTask = async (taskId: string) => {
+    try {
+      await api.resumeExportTask(taskId);
+      await fetchTasks();
+    } catch (e) {
+      alert("恢复失败");
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!confirm("确定要删除这个导出任务吗？")) return;
+    try {
+      await api.deleteExportTask(taskId);
+      await fetchTasks();
+    } catch (e) {
+      alert("删除失败");
+    }
+  };
+
+  const handleDownloadTask = async (task: ExportTask) => {
+    if (task.status !== "completed" || !task.downloadUrl) return;
+    try {
+      const blob = await api.downloadExportFile(task.downloadUrl);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${task.name || task.id}.${task.format === "zip" ? "zip" : "csv"}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("下载失败");
+    }
   };
 
   const clearSelected = () => setSelected(new Set());
+
+  const getProgress = (task: ExportTask) => {
+    const completed = task.chunks.filter((c) => c.status === "completed").length;
+    const percentage = task.totalChunks > 0 ? (completed / task.totalChunks) * 100 : 0;
+
+    const completedItems = task.chunks
+      .filter((c) => c.status === "completed")
+      .reduce((sum, c) => sum + (c.endIndex - c.startIndex), 0);
+
+    const startTime = new Date(task.startedAt || task.createdAt).getTime();
+    const elapsed = Math.max(1, Math.floor((Date.now() - startTime) / 1000));
+    const speed = completedItems / elapsed;
+    const remainingItems = task.totalItems - completedItems;
+    const remainingSeconds = speed > 0 ? Math.ceil(remainingItems / speed) : 0;
+
+    return {
+      percentage: Math.round(percentage * 100) / 100,
+      completedItems,
+      speed: Math.round(speed * 100) / 100,
+      remainingSeconds,
+      elapsedSeconds: elapsed,
+    };
+  };
 
   return (
     <div className="space-y-6">
@@ -160,7 +238,7 @@ export default function ExportCenter() {
             导出中心
           </h1>
           <p className="text-dark-400 mt-1 text-sm">
-            选择二维码批量导出为图片包或数据文件
+            选择二维码批量导出，支持分片并行处理、断点续传和进度追踪
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -173,7 +251,7 @@ export default function ExportCenter() {
             </span>
           )}
           <button
-            onClick={() => handleExport("zip")}
+            onClick={() => handleCreateExportTask("zip")}
             disabled={selected.size === 0 || exporting}
             className="btn-primary"
           >
@@ -181,7 +259,7 @@ export default function ExportCenter() {
             导出 ZIP（图片）
           </button>
           <button
-            onClick={() => handleExport("csv")}
+            onClick={() => handleCreateExportTask("csv")}
             disabled={selected.size === 0 || exporting}
             className="btn-secondary"
           >
@@ -342,87 +420,170 @@ export default function ExportCenter() {
         <div className="px-5 py-4 border-b border-dark-700 flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-brand-400" />
-            <h3 className="font-semibold text-white">历史任务</h3>
+            <h3 className="font-semibold text-white">导出任务</h3>
             <span className="tag-gray">共 {tasks.length} 个</span>
           </div>
           <button
             onClick={() => {
-              setLoading(true);
-              api
-                .listExportTasks()
-                .then((r) => setTasks(r.items))
-                .catch(() => setTasks(mockTasks))
-                .finally(() => setLoading(false));
+              setTasksLoading(true);
+              fetchTasks().finally(() => setTasksLoading(false));
             }}
             className="btn-ghost text-sm"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={`w-4 h-4 ${tasksLoading ? "animate-spin" : ""}`} />
             刷新
           </button>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-dark-900/40">
-              <tr>
-                <th className="table-head">任务</th>
-                <th className="table-head">数量</th>
-                <th className="table-head">状态</th>
-                <th className="table-head">创建时间</th>
-                <th className="table-head text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tasks.length === 0 ? (
+          {tasks.length === 0 ? (
+            <div className="py-16 text-center text-dark-500">
+              <History className="w-12 h-12 mx-auto mb-2 opacity-30" />
+              <p>暂无导出任务</p>
+              <p className="text-xs mt-1">选择二维码后点击导出按钮创建任务</p>
+            </div>
+          ) : (
+            <table className="w-full">
+              <thead className="bg-dark-900/40">
                 <tr>
-                  <td colSpan={5} className="table-cell text-center py-12 text-dark-500">
-                    <History className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                    <p>暂无历史任务</p>
-                  </td>
+                  <th className="table-head">任务名称</th>
+                  <th className="table-head">格式</th>
+                  <th className="table-head">进度</th>
+                  <th className="table-head">速度</th>
+                  <th className="table-head">剩余时间</th>
+                  <th className="table-head">状态</th>
+                  <th className="table-head text-right">操作</th>
                 </tr>
-              ) : (
-                tasks.map((t) => {
-                  const s = statusMap[t.status];
+              </thead>
+              <tbody>
+                {tasks.map((task) => {
+                  const s = statusMap[task.status];
                   const StatusIcon = s.icon;
+                  const progress = getProgress(task);
+
                   return (
-                    <tr key={t.id} className="table-row">
+                    <tr key={task.id} className="table-row">
                       <td className="table-cell">
-                        <p className="font-medium text-white">{t.name}</p>
-                        <p className="text-xs text-dark-500 font-mono mt-0.5">ID: {t.id.slice(0, 16)}...</p>
+                        <p className="font-medium text-white">{task.name}</p>
+                        <p className="text-xs text-dark-500 font-mono mt-0.5">
+                          {task.totalItems.toLocaleString()} 条 · {task.totalChunks} 分片
+                        </p>
                       </td>
                       <td className="table-cell">
-                        <span className="text-white font-semibold">{t.successCount}</span>
-                        <span className="text-dark-500 text-sm"> / {t.totalCount}</span>
+                        <span className="tag-gray">
+                          {task.format === "zip" ? (
+                            <Archive className="w-3 h-3" />
+                          ) : (
+                            <FileSpreadsheet className="w-3 h-3" />
+                          )}
+                          {task.format === "zip" ? "ZIP" : task.format === "csv" ? "CSV" : task.format}
+                        </span>
+                      </td>
+                      <td className="table-cell min-w-[180px]">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-2 bg-dark-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${
+                                task.status === "failed"
+                                  ? "bg-red-500"
+                                  : task.status === "paused"
+                                  ? "bg-yellow-500"
+                                  : "bg-brand-gradient"
+                              }`}
+                              style={{ width: `${progress.percentage}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-dark-300 w-12 text-right tabular-nums">
+                            {progress.percentage}%
+                          </span>
+                        </div>
+                      </td>
+                      <td className="table-cell">
+                        <div className="flex items-center gap-1.5 text-sm text-dark-300">
+                          <Gauge className="w-3.5 h-3.5 text-dark-500" />
+                          <span className="tabular-nums">{formatSpeed(progress.speed)}</span>
+                        </div>
+                      </td>
+                      <td className="table-cell">
+                        <div className="flex items-center gap-1.5 text-sm text-dark-300">
+                          <Timer className="w-3.5 h-3.5 text-dark-500" />
+                          <span className="tabular-nums">
+                            {task.status === "completed"
+                              ? formatDuration(progress.elapsedSeconds)
+                              : task.status === "running"
+                              ? formatDuration(progress.remainingSeconds)
+                              : "-"}
+                          </span>
+                        </div>
                       </td>
                       <td className="table-cell">
                         <span className={s.cls}>
-                          <StatusIcon className={`w-3 h-3 ${t.status === "running" ? "animate-spin" : ""}`} />
+                          <StatusIcon className={`w-3 h-3 ${task.status === "running" ? "animate-spin" : ""}`} />
                           {s.label}
                         </span>
                       </td>
-                      <td className="table-cell text-dark-400 text-xs whitespace-nowrap">
-                        {new Date(t.createdAt).toLocaleString("zh-CN", {
-                          month: "2-digit",
-                          day: "2-digit",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </td>
                       <td className="table-cell text-right">
-                        <button
-                          onClick={() => handleDownloadTask(t)}
-                          disabled={t.status !== "done"}
-                          className="btn-secondary text-sm px-3 py-1.5 disabled:opacity-40"
-                        >
-                          <Download className="w-4 h-4" />
-                          下载
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          {task.status === "running" && (
+                            <button
+                              onClick={() => handlePauseTask(task.id)}
+                              className="btn-secondary text-xs px-2 py-1"
+                              title="暂停"
+                            >
+                              <Pause className="w-3.5 h-3.5" />
+                              暂停
+                            </button>
+                          )}
+                          {task.status === "paused" && (
+                            <button
+                              onClick={() => handleResumeTask(task.id)}
+                              className="btn-primary text-xs px-2 py-1"
+                              title="恢复"
+                            >
+                              <Play className="w-3.5 h-3.5" />
+                              恢复
+                            </button>
+                          )}
+                          {task.status === "completed" && (
+                            <button
+                              onClick={() => handleDownloadTask(task)}
+                              className="btn-primary text-xs px-2 py-1"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              下载
+                            </button>
+                          )}
+                          {(task.status === "failed" || task.status === "completed" || task.status === "paused") && (
+                            <button
+                              onClick={() => handleDeleteTask(task.id)}
+                              className="btn-ghost text-xs px-2 py-1 text-red-400 hover:text-red-300"
+                              title="删除"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
-                })
-              )}
-            </tbody>
-          </table>
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      <div className="card p-5 bg-dark-900/50 border-dark-700">
+        <div className="flex items-start gap-3">
+          <Zap className="w-5 h-5 text-brand-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <h4 className="font-semibold text-white mb-2">功能说明</h4>
+            <ul className="text-sm text-dark-400 space-y-1">
+              <li>• <span className="text-brand-300">分片并行处理</span>：将大量数据分成多个分片同时处理，提升导出效率</li>
+              <li>• <span className="text-brand-300">断点续传</span>：支持随时暂停和恢复导出任务，已完成的分片不会重复处理</li>
+              <li>• <span className="text-brand-300">实时进度</span>：实时显示导出进度、处理速度和预估剩余时间</li>
+              <li>• <span className="text-brand-300">自动重试</span>：失败的分片会自动重试，最多重试 3 次</li>
+            </ul>
+          </div>
         </div>
       </div>
     </div>

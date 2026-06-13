@@ -9,6 +9,9 @@ import type {
   QrCodeStats,
   PagedResult,
   ApiResponse,
+  ExportTask,
+  ExportProgress,
+  ExportFormat,
 } from "@shared/types";
 
 const API_BASE = "/api";
@@ -138,5 +141,51 @@ export const api = {
     if (params?.page) q.set("page", String(params.page));
     if (params?.pageSize) q.set("pageSize", String(params.pageSize));
     return request<PagedResult<BatchTask>>(`/export/tasks${q.toString() ? `?${q.toString()}` : ""}`);
+  },
+
+  createExportTask(params: {
+    name?: string;
+    format: ExportFormat;
+    ids?: string[];
+    chunkSize?: number;
+    concurrency?: number;
+  }): Promise<ExportTask> {
+    return request<ExportTask>("/export/tasks", {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  },
+
+  getExportTask(id: string): Promise<ExportTask> {
+    return request<ExportTask>(`/export/tasks/${id}`);
+  },
+
+  getExportTaskProgress(id: string): Promise<ExportProgress> {
+    return request<ExportProgress>(`/export/tasks/${id}/progress`);
+  },
+
+  pauseExportTask(id: string): Promise<ExportTask> {
+    return request<ExportTask>(`/export/tasks/${id}/pause`, {
+      method: "POST",
+    });
+  },
+
+  resumeExportTask(id: string): Promise<ExportTask> {
+    return request<ExportTask>(`/export/tasks/${id}/resume`, {
+      method: "POST",
+    });
+  },
+
+  deleteExportTask(id: string): Promise<void> {
+    return request<void>(`/export/tasks/${id}`, {
+      method: "DELETE",
+    });
+  },
+
+  downloadExportFile(downloadUrl: string): Promise<Blob> {
+    return fetch(API_BASE + downloadUrl).then((r) => {
+      if (!r.ok) throw new Error("下载失败");
+      return r.blob();
+    });
   },
 };

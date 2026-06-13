@@ -1,6 +1,9 @@
 export type QrCodeType = 'static' | 'dynamic'
 export type ErrorLevel = 'L' | 'M' | 'Q' | 'H'
 export type BatchStatus = 'pending' | 'running' | 'done' | 'failed'
+export type ExportTaskStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed'
+export type ChunkStatus = 'pending' | 'processing' | 'uploading' | 'completed' | 'failed'
+export type ExportFormat = 'zip' | 'csv' | 'scans_csv' | 'full'
 
 export interface QrCode {
   id: string
@@ -109,4 +112,55 @@ export interface ApiResponse<T> {
   data?: T
   error?: string
   message?: string
+}
+
+export interface ExportChunk {
+  id: string
+  taskId: string
+  index: number
+  startIndex: number
+  endIndex: number
+  itemIds: string[]
+  status: ChunkStatus
+  retryCount: number
+  uploadedUrl?: string
+  errorMessage?: string
+  startedAt?: string
+  completedAt?: string
+  processingTimeMs?: number
+}
+
+export interface ExportProgress {
+  taskId: string
+  status: ExportTaskStatus
+  totalItems: number
+  processedItems: number
+  uploadedChunks: number
+  totalChunks: number
+  percentage: number
+  estimatedRemainingSeconds: number
+  averageSpeed: number
+  startedAt: string
+  elapsedSeconds: number
+}
+
+export interface ExportTask {
+  id: string
+  name: string
+  format: ExportFormat
+  qrcodeIds: string[]
+  totalItems: number
+  totalChunks: number
+  chunkSize: number
+  concurrency: number
+  status: ExportTaskStatus
+  chunks: ExportChunk[]
+  progress: ExportProgress
+  downloadUrl?: string
+  errorMessage?: string
+  createdAt: string
+  startedAt?: string
+  pausedAt?: string
+  completedAt?: string
+  resumedAt?: string
 }
